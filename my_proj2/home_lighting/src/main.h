@@ -23,9 +23,12 @@
 /*
  * Defines and declarations
  */
-#define LOWEST_ENERGY_MODE 	EM0			//Set the default minimum Energy mode here
-#define LED0_ON_TIME 		0.030		//in seconds
-#define ON_DUTY_CYCLE		1.75	    //in seconds
+#define LOWEST_ENERGY_MODE 	EM2			//Set the default minimum Energy mode here
+#define LIGHT_SENSOR_ON_TIME 		0.004		//in seconds
+#define ON_DUTY_CYCLE		2.5	    //in seconds
+
+#define ULFRCO_SELF_CALIBRATE	0		//0 is off, 1 is on
+#define TIME_TO_SENSE_LIGHT		ON_DUTY_CYCLE
 
 /******************************************************************************************/
 

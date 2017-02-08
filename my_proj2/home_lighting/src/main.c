@@ -375,12 +375,50 @@ void LETIMER0_Init(void)
 	my_letimer.repMode=letimerRepeatFree;
 
 	LETIMER_Init(LETIMER0, &my_letimer);
-	CMU->LFAPRESC0=0;				//Prescalar to the clock
+	//CMU->LFAPRESC0=2 << 8;
+
+
+	/*For project 2, you are going to need to prescale this*/
+	/*Prescalar is 4 bits and needs to be shifted 8 bits to the left
+	* Desired period=LETIMER period* LFXO count
+	*LETIMER period =2.5s
+	* LFXO count is 32768
+	*/
+	int Desired_Period;
+	int LETIMER0_period=TIME_TO_SENSE_LIGHT;
+	int LETIMER0_LFXO_count=32768;
+	int LETIMER0_prescalar,temp,Prescaled_two_power;
+	int LETIMER0_Max_Count=65535;							//Max count for the timer is 2^16
+	Desired_Period= LETIMER0_period * LETIMER0_LFXO_count;
+	LETIMER0_prescalar = 0;
+	temp = Desired_Period;
+	Prescaled_two_power= 1;
+
+	while (temp > LETIMER0_Max_Count)
+	{
+		LETIMER0_prescalar++;
+		Prescaled_two_power= Prescaled_two_power*2;
+		temp = Desired_Period/ Prescaled_two_power;
+	}
+
+	if(LETIMER0_prescalar>15)
+	{
+		//EM_ASSERT();							//Dont let value of prescalar be more than size of the register
+	}
+
+	CMU->LFAPRESC0=LETIMER0_prescalar << 8;				//Prescalar to the clock. Shifted by 8 according to the cmu.h file
+
+	/*
+	 * ADJUST COMP1 and COMP0 based on the prescalar
+	 */
+	/****************************************************/
 
 	int freq_in_hz,led_time_count,led_time_duty_on;
 	freq_in_hz=CMU_ClockFreqGet(cmuClock_LFA);
-	led_time_count=freq_in_hz*ON_DUTY_CYCLE;
-	led_time_duty_on=freq_in_hz*LED0_ON_TIME;
+	led_time_count=((freq_in_hz*ON_DUTY_CYCLE)/2);
+	led_time_duty_on=((freq_in_hz*LIGHT_SENSOR_ON_TIME)/2);
+
+
 
 
 	LETIMER_CompareSet(LETIMER0, 0, led_time_count);
@@ -398,36 +436,51 @@ void LETIMER0_Init(void)
 void ACMP0_my_Init(void)
 {
 	ACMP_Init_TypeDef my_acmp0;
-	GPIO_PinModeSet(gpioPortC,6, gpioModeDisabled, 0);			//Initialize the Light sense
-	GPIO_PinModeSet(gpioPortD,6, gpioModeDisabled, 0);			//Initialize the Light excite
+	GPIO_PinModeSet(gpioPortC,6, gpioModeInput, 0);			//Initialize the Light sense as disabled
+	GPIO_PinModeSet(gpioPortD,6, gpioModePushPull, 0);			//Initialize the Light excite as push pull
 
-	ACMP0->INPUTSEL=0x02<<_ACMP_INPUTSEL_VDDLEVEL_SHIFT;
-	//ACMP_GPIOSetup()
-	//Not sure about the positive value.. go thru data sheet
-	ACMP_ChannelSet(ACMP0,acmpChannelVDD,acmpChannel6);
+	/*To turn off the voltage do a pinModeclear*/
+	/*For low voltage it will transition from high to 0 when looking for darkness
+	 * Looking for light, lower voltage on plus side ie from 0 to 1
+	 */
 
+
+
+	/*
+	 * ACMP should always start in active mode and then enable the LPREF after warmup time
+	 * Before warm up block EM1 and then unblock in the IRQ
+	 */
 	my_acmp0.biasProg=0x7;		/* biasProg */
-	my_acmp0.enable=true;		//Enable after init
-	my_acmp0.fullBias=false;		//default is false higher the bias the faster the comparison
+	my_acmp0.enable=false;		//Enable after init
+	my_acmp0.fullBias=true;		//default is false higher the bias the faster the comparison
 	my_acmp0.halfBias=false;	//Lower bias better for power
 	my_acmp0.hysteresisLevel=acmpHysteresisLevel1;		//Higher the better..default is 5
 	my_acmp0.inactiveValue=false;
 	my_acmp0.interruptOnFallingEdge=false;
-	my_acmp0.interruptOnRisingEdge=false;
+	my_acmp0.interruptOnRisingEdge=true;			//Default is false
+	/*Play with low power reference bit for low power*/
 	my_acmp0.lowPowerReferenceEnabled=false;	/* Disabled emitting inactive value during warmup. */
 	my_acmp0.vddLevel=0x3D;				/* VDD level */
 	my_acmp0.warmTime=acmpWarmTime512;		/* 512 cycle warmup to be safe */
 
 	ACMP_Init(ACMP0, &my_acmp0);
 
+	ACMP0->INPUTSEL=0x02<<_ACMP_INPUTSEL_VDDLEVEL_SHIFT;
+		//ACMP_GPIOSetup()
+		//Not sure about the positive value.. go thru data sheet
+		ACMP_ChannelSet(ACMP0,acmpChannelVDD,acmpChannel6);
+
+
 	//Interrupts part
 	ACMP0->IFC=0xFFFF ;					//Clear all interrupts
-	ACMP0->IEN=ACMP_IEN_WARMUP | ACMP_IEN_EDGE;
+	//ACMP0->IEN= ACMP_IEN_EDGE;		//ACMP_IEN_WARMUP |
 
 	blockSleepMode(EM2);		//Minimum is EM3 possible
 
 	//ACMP0->CTRL=ACMP_CTRL_EN;
-	NVIC_EnableIRQ(ACMP0_IRQn);
+	//NVIC_EnableIRQ(ACMP0_IRQn);
+
+	//ACMP_Enable(ACMP0);
 
 	/*
 	 * Light sense: Output from the photodiode is connected to PC6 and ACMP0 Channel 6
@@ -474,10 +527,10 @@ void timer0_calibration(void)
 
 	//You may have to select a channel
 	//Interrupts part
-	TIMER0->IFC=0xFFFF ;					//Clear all interrupts
-	TIMER0->IEN=TIMER_IEN_OF;				//Check for overflow
+	///TIMER0->IFC=0xFFFF ;					//Clear all interrupts
+	//TIMER0->IEN=TIMER_IEN_OF;				//Check for overflow
 
-	NVIC_EnableIRQ(TIMER0_IRQn);
+	//NVIC_EnableIRQ(TIMER0_IRQn);
 	//You may have to do a TIMER0Enable ()
 	//Since TImer0->CNT is not set, it counts to the maximum value and then overflows
 }
@@ -526,7 +579,42 @@ void LETIMER0_IRQHandler(void)
 	INT_Disable();								//Make routine atomic
 	intFlags=LETIMER_IntGet(LETIMER0);
 	LETIMER_IntClear(LETIMER0,intFlags);
-	Toggle_LED(0);								//Toggle the Led
+
+	if(intFlags & _LETIMER_IF_COMP0_MASK)
+	{
+		//Turn_on_LED(0);								//Toggle the Led
+		GPIO_PinModeSet(gpioPortD,6, gpioModePushPull, 1);
+		ACMP_Enable(ACMP0);
+		for(int m=0;m<20;m++);
+		//while(!(ACMP0->IF & 0x02));
+		//ACMP0->IFC|=ACMP_IFC_WARMUP | ACMP_IFC_EDGE;
+		//Turn_on_LED(0);
+
+	}
+	if(intFlags & _LETIMER_IF_COMP1_MASK)
+	{
+		//Turn_off_LED(0);
+	/*
+	 * Enable the ACMP
+	 * Set the pins and all
+	 * poll for the warm up
+	 * dont disable the acmp
+	 * Go to sleep EM3
+	 * Wake up when the Comp1 completes its count
+	 */
+
+	if(ACMP0->STATUS & _ACMP_STATUS_ACMPOUT_MASK )
+	{
+		Turn_off_LED(1);
+	}
+	else
+	{
+		Turn_on_LED(1);
+	}
+	GPIO_PinModeSet(gpioPortC,6, gpioModeDisabled, 0);			//Initialize the Light sense as disabled
+	GPIO_PinModeSet(gpioPortD,6, gpioModeDisabled, 0);			//Initialize the Light excite as push pull
+	ACMP_Disable(ACMP0);
+	}
 	INT_Enable();
 }
 
@@ -535,17 +623,19 @@ void ACMP0_IRQHandler(void)
 {
 	int intFlags;
 	INT_Disable();								//Make routine atomic
-	intFlags=ACMP0->IF;
-	Toggle_LED(1);
-	if(intFlags==ACMP_IF_EDGE)
+	intFlags=ACMP_IntGet(ACMP0);
+	Toggle_LED(0);
+	//Turn_on_LED(1);
+	if(intFlags || 0x01)
 	{
+		//ACMP_IntClear(ACMP0,intFlags);
 		ACMP0->IFC|=ACMP_IFC_EDGE ;				//Clear the interrupt
-												//Toggle the Led
+		//Turn_on_LED(0);										//Toggle the Led
 	}
-	else if(intFlags==ACMP_IF_WARMUP)
+	if(intFlags || 0x02)
 	{
 		ACMP0->IFC|=ACMP_IFC_WARMUP ;		//Clear the interrupt
-		Turn_on_LED(0);
+		//Turn_on_LED(1);
 	}
 	INT_Enable();
 }
@@ -559,7 +649,7 @@ void TIMER0_IRQHandler(void)
 	TIMER_IntClear(TIMER0,intFlags);
 	//ACMP0->IFC=0xFFFF;
 
-	Toggle_LED(1);								//Toggle the Led
+	//Toggle_LED(1);								//Toggle the Led
 	//Toggle_LED(0);
 	INT_Enable();
 }
@@ -612,15 +702,23 @@ void Clock_setup(void)
 		else
 			{
 				CMU_OscillatorEnable(cmuOsc_LFXO,true, true);		//use ULFRCO for EM3
-				CMU_OscillatorEnable(cmuOsc_HFRCO,true, true);		//use ULFRCO for EM3
+				//CMU_OscillatorEnable(cmuOsc_HFRCO,true, true);		//use ULFRCO for EM3
 				CMU_ClockSelectSet(cmuClock_LFA,cmuSelect_LFXO);
 				CMU_ClockEnable(cmuClock_CORELE, true);		//Supposed to be CORELE. Do a search in the enum part to know
 				CMU_ClockEnable(cmuClock_LETIMER0,true);
 				CMU_ClockEnable(cmuClock_ACMP0,true);
 				CMU_ClockEnable(cmuClock_TIMER0,true);
-				blockSleepMode(EM0);
+				blockSleepMode(EM2);
 			}
 
+}
+
+/************************************************************************/
+void calculation_routine(void)
+{
+	/*
+	 * Do not define the variable as float
+	 */
 }
 
 
@@ -669,16 +767,15 @@ int main(void)
 
   GPIO_LedsInit();
   blockSleepMode(LOWEST_ENERGY_MODE);			//Set the default lowest energy mode
-   Clock_setup();
-   // ACMP0_my_Init();
-  //LETIMER0_Init();
-   //Turn_on_LED(0);
-   timer0_calibration();
-  								//Turn on the LED as it will start toggling in the Interrupt routine
+  Clock_setup();
+  ACMP0_my_Init();
+  LETIMER0_Init();
+  //Turn_on_LED(0);
+  // timer0_calibration();
 
      while(1)
      {
-   	  //sleep();									//Keep putting the board to sleep
+   	  sleep();									//Keep putting the board to sleep
      }
 
   /* Infinite loop */
